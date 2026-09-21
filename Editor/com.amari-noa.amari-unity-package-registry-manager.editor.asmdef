@@ -1,0 +1,11 @@
+{
+  "name": "com.amari-noa.amari-unity-package-registry-manager.editor",
+  "rootNamespace": "com.amari_noa.amari_unity_package_registry_manager.editor",
+  "references": [
+    "com.amari-noa.unity-editor-localization-core.editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}
