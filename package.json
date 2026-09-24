@@ -1,6 +1,6 @@
 {
   "name": "com.amari-noa.amari-unity-package-registry-manager",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0",
   "displayName": "Amari Unity Package Registry Manager",
   "description": "Unity Editor tool for managing scoped registries and credentials.",
   "unity": "2022.3",
@@ -13,7 +13,8 @@
     "url": "https://github.com/AmariNoa/Amari-Unity-Package-Registry-Manager.git"
   },
   "dependencies": {
-    "com.amari-noa.unity-editor-localization-core": "1.0.0"
+    "com.amari-noa.unity-editor-localization-core": "1.0.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
   },
   "files": [
     "Editor/",
@@ -21,6 +22,8 @@
     "LICENSE",
     "LICENSE.meta",
     "package.json",
-    "package.json.meta"
+    "package.json.meta",
+    "README.md",
+    "README.md.meta"
   ]
 }
