@@ -31,20 +31,20 @@ Unity の Package Manager の「Add package from git URL...」でインストー
 2. 左上の `+` から `Add package from git URL...` を選び、次の URL を入力して追加します。インストールが完了するまで待ちます。
 
    ```
-   https://github.com/AmariNoa/Unity-Editor-Localization-Core.git#v1.0.0
+   https://github.com/AmariNoa/Unity-Editor-Localization-Core.git#v1.0.1
    ```
 
 3. 同じ手順で、次の URL を追加します。
 
    ```
-   https://github.com/AmariNoa/Amari-Unity-Package-Registry-Manager.git#v0.1.0
+   https://github.com/AmariNoa/Amari-Unity-Package-Registry-Manager.git#v0.2.0
    ```
 
 補足:
 
 - Unity は `package.json` に書かれた Git パッケージ同士の依存関係を自動で解決できません。そのため、手順 2 の Unity Editor Localization Core を先にインストールする必要があります。
 - Unity 公式の Newtonsoft Json（3.2.1）への依存は、UPM が自動で解決します。
-- URL 末尾の `#v1.0.0`・`#v0.1.0` はタグ指定です。タグを固定すると、同じバージョンを再現よくインストールできます。
+- URL 末尾の `#v1.0.1`・`#v0.2.0` はタグ指定です。タグを固定すると、同じバージョンを再現よくインストールできます。
 - パッケージはリポジトリのルートにあるため、URL に `?path=` を指定する必要はありません。
 
 ## 設定画面の場所
@@ -55,8 +55,8 @@ Unity の Package Manager の「Add package from git URL...」でインストー
 
 ## 基本的な使い方
 
-1. 設定画面でレジストリを選択するか、新しく追加します。名前・URL・スコープを設定します。
-2. 必要に応じて、選択したレジストリをプロジェクトに追加、またはプロジェクトから削除します。
+1. 設定画面でレジストリを選択するか、新しく追加します。名前・URL・スコープを設定します。入力内容は、一部の項目が未入力でも共通カタログへ自動保存されます。
+2. 必要に応じて、対象スコープの「プロジェクトへ追加」を押します。名前・URL・対象スコープが不足している場合は警告が表示されるため、補ってから追加してください。プロジェクトからの削除もこの画面で行えます。
 3. 認証が必要なレジストリでは、認証方式を選んで認証情報を設定します。
 4. パッケージのインストールは、通常どおり Unity の Package Manager で行います。
 
