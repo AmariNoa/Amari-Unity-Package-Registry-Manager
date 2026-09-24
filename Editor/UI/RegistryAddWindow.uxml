@@ -4,8 +4,8 @@
         <ui:TextField name="registry-name-input" label="レジストリ名" class="compact-field" />
         <ui:TextField name="registry-url-input" label="URL" value="https://" class="compact-field" />
         <ui:VisualElement class="registry-add-actions">
-            <ui:Button name="save-registry" text="登録" />
             <ui:Button name="cancel-registry" text="キャンセル" />
+            <ui:Button name="save-registry" text="登録" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

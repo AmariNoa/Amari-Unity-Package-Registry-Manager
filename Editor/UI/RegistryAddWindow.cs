@@ -9,12 +9,13 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
     {
         private const string UxmlPath = "Packages/com.amari-noa.amari-unity-package-registry-manager/Editor/UI/RegistryAddWindow.uxml";
         private Func<string, string, string> _register;
+        private Action _relabel;
 
         internal static void Open(Func<string, string, string> register)
         {
             var window = CreateInstance<RegistryAddWindow>();
             window._register = register;
-            window.titleContent = new GUIContent("レジストリを追加");
+            window.titleContent = new GUIContent(RegistryText.T("add.title"));
             window.minSize = new Vector2(360, 130);
             window.ShowUtility();
         }
@@ -24,6 +25,10 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             var template = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(UxmlPath);
             if (template == null) throw new InvalidOperationException("Registry add window UI asset is missing.");
             template.CloneTree(rootVisualElement);
+            // Labels only: entered text stays when the language changes.
+            _relabel = RegistryText.Localize(rootVisualElement);
+            _relabel += () => titleContent = new GUIContent(RegistryText.T("add.title"));
+            RegistryText.Changed += Relabel;
             var name = rootVisualElement.Q<TextField>("registry-name-input");
             var url = rootVisualElement.Q<TextField>("registry-url-input");
             rootVisualElement.Q<Button>("save-registry").clicked += () =>
@@ -32,12 +37,16 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 var error = _register(name.value, url.value);
                 if (error != null)
                 {
-                    EditorUtility.DisplayDialog("登録できませんでした", error, "閉じる");
+                    EditorUtility.DisplayDialog(RegistryText.T("add.failed.title"), error, RegistryText.T("button.close"));
                     return;
                 }
                 Close();
             };
             rootVisualElement.Q<Button>("cancel-registry").clicked += Close;
         }
+
+        private void Relabel(string _) => _relabel?.Invoke();
+
+        private void OnDisable() => RegistryText.Changed -= Relabel;
     }
 }

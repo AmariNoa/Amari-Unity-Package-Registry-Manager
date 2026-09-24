@@ -1,0 +1,28 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" editor-extension-mode="True">
+    <Style src="RegistryCredentials.uss" />
+    <ui:VisualElement class="registry-auth-content">
+        <ui:TextField name="auth-url" label="URL" readonly="true" class="compact-field" />
+        <ui:TextField name="auth-current-kind" label="現在の方式" readonly="true" class="compact-field" />
+        <ui:TextField name="auth-current-account" label="アカウント" readonly="true" class="compact-field" />
+        <ui:TextField name="auth-current-expiry" label="有効期限" readonly="true" class="compact-field" />
+        <ui:TextField name="auth-config-path" label="UPM設定" readonly="true" class="compact-field" />
+        <ui:Label name="auth-modes-heading" text="認証方式（同じOSユーザーでこのURLを使う全プロジェクトに共通）" class="heading wrapping auth-modes-heading" />
+        <ui:GroupBox name="auth-modes" class="auth-modes">
+            <ui:RadioButton name="auth-mode-npm" text="npm token" />
+            <ui:RadioButton name="auth-mode-basic" text="Basic (_auth)" />
+            <ui:RadioButton name="auth-mode-oauth" text="OAuth Webログイン" />
+            <ui:RadioButton name="auth-mode-pat" text="PAT" />
+            <ui:RadioButton name="auth-mode-none" text="認証なし" />
+        </ui:GroupBox>
+        <ui:TextField name="auth-token" label="トークン" password="true" class="compact-field" />
+        <ui:TextField name="auth-username" label="ユーザー名" class="compact-field" />
+        <ui:TextField name="auth-password" label="パスワード" password="true" class="compact-field" />
+        <ui:TextField name="auth-proxy" label="OAuthプロキシ" class="compact-field" />
+        <ui:VisualElement class="registry-auth-actions">
+            <ui:Button name="auth-cancel" text="キャンセル" />
+            <ui:VisualElement class="grow" />
+            <ui:Button name="auth-relogin" text="再ログイン" />
+            <ui:Button name="auth-apply" text="適用" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace com.amari_noa.amari_unity_package_registry_manager.editor
@@ -7,7 +8,6 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
     internal static class RegistrySettingsJson
     {
         private const int MaximumJsonLength = 1024 * 1024;
-        private const string InvalidSettingsMessage = "レジストリ設定のJSONが不正です。名前・http(s)のURL・スコープ配列を確認してください。";
 
         [Serializable]
         internal sealed class Entry
@@ -54,6 +54,56 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             return Validate(document?.scopedRegistries);
         }
 
+        internal static string WriteCatalog(Entry[] entries)
+        {
+            if (entries == null) throw InvalidSettings();
+            var stored = new Entry[entries.Length];
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < entries.Length; index++)
+            {
+                var entry = entries[index];
+                if (entry == null || string.IsNullOrWhiteSpace(entry.name) || string.IsNullOrWhiteSpace(entry.url))
+                    throw InvalidSettings();
+                var name = entry.name.Trim();
+                var url = entry.url.Trim().TrimEnd('/');
+                if (!names.Add(name) || !urls.Add(url) || !AcceptUrl(url)) throw InvalidSettings();
+                var scopes = entry.scopes == null ? new string[0] : entry.scopes.Select(scope => scope ?? string.Empty).ToArray();
+                stored[index] = new Entry { name = name, url = url, scopes = scopes };
+            }
+            var json = JsonUtility.ToJson(new Document { scopedRegistries = stored }, true);
+            if (json.Length > MaximumJsonLength) throw InvalidSettings();
+            return json;
+        }
+
+        internal static Entry[] ReadCatalog(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json) || json.Length > MaximumJsonLength) throw InvalidSettings();
+            var trimmed = json.Trim();
+            if (trimmed.Length > 0 && trimmed[0] == '\uFEFF') trimmed = trimmed.TrimStart('\uFEFF').Trim();
+            if (trimmed.Length == 0 || trimmed[0] != '{' || trimmed[trimmed.Length - 1] != '}') throw InvalidSettings();
+            Document document;
+            try { document = JsonUtility.FromJson<Document>(trimmed); }
+            catch (ArgumentException) { throw InvalidSettings(); }
+            if (document?.scopedRegistries == null) throw InvalidSettings();
+            if (document.scopedRegistries.Length == 0) return new Entry[0];
+            WriteCatalog(document.scopedRegistries);
+            return document.scopedRegistries.Select(entry => new Entry
+            {
+                name = entry.name.Trim(),
+                url = entry.url.Trim().TrimEnd('/'),
+                scopes = entry.scopes == null ? new string[0] : entry.scopes.Select(scope => scope ?? string.Empty).ToArray()
+            }).ToArray();
+        }
+
+        private static bool AcceptUrl(string url)
+        {
+            return Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+                !string.IsNullOrEmpty(uri.Host) && string.IsNullOrEmpty(uri.UserInfo) &&
+                string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment);
+        }
+
         internal static Entry[] Validate(Entry[] entries)
         {
             if (entries == null || entries.Length == 0) throw InvalidSettings();
@@ -89,6 +139,6 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             return result;
         }
 
-        private static ArgumentException InvalidSettings() => new ArgumentException(InvalidSettingsMessage);
+        private static ArgumentException InvalidSettings() => new RegistryText.Error("json.invalid");
     }
 }
