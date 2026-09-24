@@ -31,7 +31,7 @@ Unity の Package Manager の「Add package from git URL...」でインストー
 2. 左上の `+` から `Add package from git URL...` を選び、次の URL を入力して追加します。インストールが完了するまで待ちます。
 
    ```
-   https://github.com/AmariNoa/Unity-Editor-Localization-Core.git#v1.0.0
+   https://github.com/AmariNoa/Unity-Editor-Localization-Core.git#v1.0.1
    ```
 
 3. 同じ手順で、次の URL を追加します。
@@ -44,7 +44,7 @@ Unity の Package Manager の「Add package from git URL...」でインストー
 
 - Unity は `package.json` に書かれた Git パッケージ同士の依存関係を自動で解決できません。そのため、手順 2 の Unity Editor Localization Core を先にインストールする必要があります。
 - Unity 公式の Newtonsoft Json（3.2.1）への依存は、UPM が自動で解決します。
-- URL 末尾の `#v1.0.0`・`#v0.1.0` はタグ指定です。タグを固定すると、同じバージョンを再現よくインストールできます。
+- URL 末尾の `#v1.0.1`・`#v0.1.0` はタグ指定です。タグを固定すると、同じバージョンを再現よくインストールできます。
 - パッケージはリポジトリのルートにあるため、URL に `?path=` を指定する必要はありません。
 
 ## 設定画面の場所
