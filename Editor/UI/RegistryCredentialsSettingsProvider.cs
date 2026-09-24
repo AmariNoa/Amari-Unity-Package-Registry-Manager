@@ -44,6 +44,7 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
         private static string UntitledName => RegistryText.T("registry.untitled");
         private static string UnresolvedTip => RegistryText.T("tip.unresolved");
         private static string AmbiguousTip => RegistryText.T("tip.ambiguous");
+        private static string DisplayName(Registry item) => string.IsNullOrWhiteSpace(item.Name) ? UntitledName : item.Name;
 
         private static void Render(VisualElement root, string displayName, State state)
         {
@@ -62,6 +63,17 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
 
             BindRegistryPane(root, displayName, state, rowTemplate, scopeRowTemplate);
             BindSettingsFiles(root, displayName, state);
+        }
+
+        // Renders once the current event has finished, so an edit handler never rebuilds the page it runs in.
+        // Skipped when the page has been closed or reopened meanwhile.
+        private static void RenderLater(VisualElement root, string displayName, State state)
+        {
+            var lifetime = state.Lifetime;
+            EditorApplication.delayCall += () =>
+            {
+                if (root.panel != null && lifetime == state.Lifetime) Render(root, displayName, state);
+            };
         }
 
         private static void BindLanguage(VisualElement root, State state)
@@ -144,13 +156,20 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             return host.Length == 0 ? "registry-settings.json" : "registry-settings-" + host + ".json";
         }
 
-        private static string ExportSettings(Registry item) => RegistrySettingsJson.Serialize(new[]
+        // The settings file keeps its strict format: a partial catalog entry fails clearly instead of being exported.
+        private static string ExportSettings(Registry item)
         {
-            new RegistrySettingsJson.Entry
+            if (string.IsNullOrWhiteSpace(item.Name) || string.IsNullOrWhiteSpace(item.Url) ||
+                item.Scopes.Any(scope => string.IsNullOrWhiteSpace(scope.Value)))
+                throw new RegistryText.Error("export.incomplete");
+            return RegistrySettingsJson.Serialize(new[]
             {
-                name = item.Name, url = item.Url, scopes = item.Scopes.Select(scope => scope.Value).ToArray()
-            }
-        });
+                new RegistrySettingsJson.Entry
+                {
+                    name = item.Name, url = item.Url, scopes = item.Scopes.Select(scope => scope.Value).ToArray()
+                }
+            });
+        }
 
         private static bool ImportSettings(State state, RegistrySettingsJson.Entry[] entries, Func<string, int> chooseConflict)
         {
@@ -162,7 +181,7 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 var entry = entries[i];
                 var existing = state.Registries.FirstOrDefault(item => string.Equals(item.Url, entry.url, StringComparison.OrdinalIgnoreCase));
                 if (existing == null) continue;
-                choices[i] = chooseConflict(existing.Name);
+                choices[i] = chooseConflict(DisplayName(existing));
                 if (choices[i] != 0 && choices[i] != 2) return false;
                 if (choices[i] == 2 && existing.Scopes.Any(scope =>
                     (scope.InProject || scope.Blocked) && !entry.scopes.Contains(scope.Value)))
@@ -180,7 +199,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                     existing.Name = entry.name;
             }
             foreach (var item in projected)
-                if (!ValidateRegistryIdentity(item.Name, item.Url, projected, item, out var error))
+                // Catalog rules only: existing entries may be partial, and imported ones are complete already.
+                if (!ValidateCatalogIdentity(item.Name, item.Url, projected, item, out var error))
                     throw new ArgumentException(error);
 
             for (var i = 0; i < entries.Length; i++)
@@ -297,8 +317,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             element.name = "registry-row-" + item.Id;
             element.EnableInClassList("registry-row-transient", item.Transient);
             var name = element.Q<Label>("row-name");
-            name.text = item.Transient && string.IsNullOrWhiteSpace(item.Name) ? UntitledName : item.Name;
-            name.tooltip = item.Transient ? RegistryText.T("tip.row.transient") : item.Name;
+            name.text = DisplayName(item);
+            name.tooltip = item.Transient ? RegistryText.T("tip.row.transient") : DisplayName(item);
             var url = element.Q<Label>("row-url");
             url.text = item.Url;
             url.tooltip = item.Url;
@@ -313,14 +333,30 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             name.SetValueWithoutNotify(item.Name);
             url.SetValueWithoutNotify(item.Url);
             BindScopeList(root, displayName, state, root.Q<ListView>("registry-detail-scopes"), item, scopeRowTemplate);
-            BindRegistration(root, displayName, state, item, name, url);
             BindCredentialActions(root, displayName, state, item);
-            if (item.Transient) return;
+            if (item.Transient)
+            {
+                // A draft's credential URL is fixed; its name and scopes are saved as they are edited.
+                url.SetEnabled(false);
+                Action urlTip = () => url.tooltip = RegistryText.T("tip.url.transient");
+                urlTip();
+                state.Relabel += urlTip;
+            }
 
             Action<string, string> updateIdentity = (candidateName, candidateUrl) =>
             {
+                // A draft's first edit promotes it into the catalog as this same object, so later edits take the path below.
+                if (item.Transient)
+                {
+                    var draftName = (candidateName ?? "").Trim();
+                    name.SetValueWithoutNotify(draftName);
+                    if (draftName == item.Name) return;
+                    item.Name = draftName;
+                    SaveEdit(root, displayName, state, item);
+                    return;
+                }
                 // Nothing to save or re-render when the committed text normalizes to the current identity.
-                if (candidateName?.Trim() == item.Name && candidateUrl != null && NormalizeUrl(candidateUrl) == item.Url)
+                if (candidateName?.Trim() == item.Name && NormalizeUrl(candidateUrl) == item.Url)
                 {
                     name.SetValueWithoutNotify(item.Name);
                     url.SetValueWithoutNotify(item.Url);
@@ -331,57 +367,63 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 url.SetValueWithoutNotify(item.Url);
                 if (!accepted)
                 {
-                    EditorUtility.DisplayDialog(RegistryText.T("registry.updateFailed.title"), error, RegistryText.T("button.close"));
+                    Notify(RegistryText.T("registry.updateFailed.title"), error);
                     return;
                 }
                 if (!Finish(root, displayName, state)) return;
-                // Re-render: a URL change can hide or reveal a transient row and change which credential this entry uses.
-                if (root.panel != null) Render(root, displayName, state);
+                // Re-render after this event: a URL change can hide or reveal a transient row and change which credential this entry uses.
+                RenderLater(root, displayName, state);
             };
             name.RegisterValueChangedCallback(change => { if (IsOwnChange(name, change)) updateIdentity(change.newValue, item.Url); });
             url.RegisterValueChangedCallback(change => { if (IsOwnChange(url, change)) updateIdentity(item.Name, change.newValue); });
         }
 
-        // A transient row edits its draft in memory only; the catalog is written solely by the explicit registration.
-        private static void BindRegistration(VisualElement root, string displayName, State state, Registry item, TextField name, TextField url)
+        // Autosave for an edit of this row, called from its event handlers. A draft is promoted into the catalog first;
+        // the page is re-rendered only after the event, never inside it.
+        private static bool SaveEdit(VisualElement root, string displayName, State state, Registry item)
         {
-            var register = root.Q<Button>("register-orphan");
-            Action update = () =>
-            {
-                var error = item.Transient ? RegistrationBlock(state, item) : null;
-                register.SetEnabled(item.Transient && error == null);
-                register.tooltip = !item.Transient ? RegistryText.F("tip.register.idle", UntitledName) :
-                    error ?? RegistryText.T("tip.register.ready");
-            };
-            update();
-            state.Relabel += update;
-            if (!item.Transient) return;
-            url.SetEnabled(false);
-            Action urlTip = () => url.tooltip = RegistryText.T("tip.url.transient");
-            urlTip();
-            state.Relabel += urlTip;
-            name.RegisterValueChangedCallback(change =>
-            {
-                var draftName = (change.newValue ?? "").Trim();
-                if (!IsOwnChange(name, change) || draftName == item.Name) return;
-                item.Name = draftName;
-                update();
-                root.Q<ListView>("registry-list").RefreshItems();
-            });
-            register.clicked += () => RegisterDraft(root, displayName, state, item);
+            if (!item.Transient) return Finish(root, displayName, state);
+            var promoted = TryPromote(state, item, out var error);
+            if (!promoted) Notify(RegistryText.T("catalog.title"), error);
+            RenderLater(root, displayName, state);
+            return promoted;
         }
 
-        // Null when the draft may be registered. Only a current draft with exactly one credential URL qualifies,
-        // so registration never settles which of several equivalent credentials the catalog entry will use.
-        private static string RegistrationBlock(State state, Registry draft)
+        // Moves a current draft into the catalog as the same object, so rows and callbacks bound to it stay valid. Only a
+        // draft with exactly one readable credential URL qualifies, so no equivalent credential is picked on the user's
+        // behalf; the credential itself is never changed. On failure the draft keeps its input for another try.
+        private static bool TryPromote(State state, Registry draft, out string error)
         {
-            var error = CredentialDeleteBlock(state, draft);
-            if (error != null) return error;
-            if (state.Stamp == null) return RegistryText.T("catalog.cannotSave");
-            return ValidateRegistryIdentity(draft.Name, NormalizeUrl(draft.CredentialUrl), state.Registries, null, out error) ? null : error;
+            error = CredentialDeleteBlock(state, draft);
+            if (error != null) return false;
+            if (state.Stamp == null) { error = RegistryText.T("catalog.cannotSave"); return false; }
+            var url = NormalizeUrl(draft.CredentialUrl);
+            if (!ValidateCatalogIdentity(draft.Name, url, state.Registries, null, out error)) return false;
+            var draftId = draft.Id;
+            var draftUrl = draft.Url;
+            var selected = state.SelectedItem == draft;
+            draft.Id = state.NextId();
+            draft.Url = url;
+            draft.Transient = false;
+            state.Registries.Add(draft);
+            if (!PersistCatalog(state, out error))
+            {
+                // A conflict has already reloaded the catalog.
+                state.Registries.Remove(draft);
+                draft.Id = draftId;
+                draft.Url = draftUrl;
+                draft.Transient = true;
+                return false;
+            }
+            state.Drafts.Remove(draft.DraftKey);
+            state.Orphans.Remove(draft);
+            draft.DraftKey = null;
+            draft.CredentialUrl = null;
+            if (selected) state.Select(draft);
+            return true;
         }
 
-        // Null when the draft is current and names exactly one readable credential URL; shared by registration and deletion.
+        // Null when the draft is current and names exactly one readable credential URL; shared by promotion and deletion.
         private static string CredentialDeleteBlock(State state, Registry draft)
         {
             if (!draft.Transient || !state.Orphans.Contains(draft) || !state.Drafts.TryGetValue(draft.DraftKey, out var current) || current != draft)
@@ -435,6 +477,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
         {
             if (!state.Registries.Contains(item) || state.SelectedRegistry != item) return RegistryText.T("block.registryStale");
             if (state.Stamp == null) return RegistryText.T("catalog.cannotSave");
+            // Without a URL the entry is in no project and has no credential of its own.
+            if (string.IsNullOrWhiteSpace(item.Url)) return null;
             if (state.ManifestError != null) return state.ManifestError;
             if (item.InProject) return RegistryText.T("block.inProject");
             if (item.ReferenceCount > 0) return RegistryText.T("block.referenced");
@@ -462,7 +506,7 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 return;
             }
             var target = state.CredentialUrlOf(item, out _);
-            var hasCredential = state.Credentials.ContainsKey(target);
+            var hasCredential = target != null && state.Credentials.ContainsKey(target);
             var catalogStamp = state.Stamp;
             RegistryService service;
             string credentialStamp = null;
@@ -476,9 +520,11 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 Notify(title, RegistryText.F("common.targetUrl", item.Url) + "\n\n" + CredentialMessages.Describe(failure));
                 return;
             }
-            if (!Confirm(RegistryText.T("deleteRegistry.confirm.title"), RegistryText.F("common.targetUrl", item.Url) +
-                    (target != item.Url && hasCredential ? "\n" + RegistryText.F("deleteRegistry.credentialUrl", target) : "") + "\n\n" +
-                    RegistryText.F(hasCredential ? "deleteRegistry.confirm.withCredential" : "deleteRegistry.confirm.withoutCredential", item.Name)))
+            // An entry without a URL names no target URL.
+            var targetText = string.IsNullOrWhiteSpace(item.Url) ? "" : RegistryText.F("common.targetUrl", item.Url) +
+                (target != item.Url && hasCredential ? "\n" + RegistryText.F("deleteRegistry.credentialUrl", target) : "") + "\n\n";
+            if (!Confirm(RegistryText.T("deleteRegistry.confirm.title"), targetText +
+                    RegistryText.F(hasCredential ? "deleteRegistry.confirm.withCredential" : "deleteRegistry.confirm.withoutCredential", DisplayName(item))))
                 return;
 
             // The dialog may have outlived this row or the project state it was checked against.
@@ -493,6 +539,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             var stage = 0; // 0 catalog only, 1 credential re-check, 2 credential deletion, 3 catalog replace after deletion
             Action deleteCredential = () =>
             {
+                // An entry without a URL has no credential to check or delete.
+                if (target == null) return;
                 stage = 1;
                 // Credentials that appeared or changed spelling during the dialog are neither missed nor guessed.
                 var urls = service.Settings.Summaries().Select(summary => summary.Url).ToList();
@@ -543,49 +591,59 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 (untouched ? kept : "\n\n" + RegistryText.T("deleteRegistry.credentialMaybeChanged"));
         }
 
-        private static void RegisterDraft(VisualElement root, string displayName, State state, Registry draft)
+        // Add to Project is where the entry must be complete: missing fields are listed together, then the identity is
+        // checked and the entry saved (a draft promoted first) before the manifest is touched. Any rejection leaves the
+        // manifest, Package Manager and credentials alone.
+        private static void AddToProject(VisualElement root, string displayName, State state, Registry item, Scope scope)
         {
-            var error = RegistrationBlock(state, draft);
-            if (error != null)
+            var title = RegistryText.T("project.addFailed.title");
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(item.Name)) missing.Add(RegistryText.T("project.missing.name"));
+            if (string.IsNullOrWhiteSpace(item.Url)) missing.Add(RegistryText.T("project.missing.url"));
+            if (string.IsNullOrWhiteSpace(scope.Value)) missing.Add(RegistryText.T("project.missing.scope"));
+            if (missing.Count > 0)
             {
-                Notify(RegistryText.T("register.failed.title"), error);
+                Notify(title, RegistryText.T("project.missing") + "\n\n" + string.Join("\n", missing));
                 return;
             }
-            var url = NormalizeUrl(draft.CredentialUrl);
-            var added = new Registry(state.NextId(), draft.Name.Trim(), url, draft.Scopes.Select(scope => scope.Value ?? "").ToList(), false, 0);
-            state.Registries.Add(added);
-            if (!PersistCatalog(state, out error))
+            if (!item.Scopes.Contains(scope) || (!item.Transient && !state.Registries.Contains(item)))
             {
-                // The draft stays for another try; a conflict has already reloaded the catalog.
-                state.Registries.Remove(added);
-                Notify(RegistryText.T("catalog.title"), error);
+                Notify(title, RegistryText.T("block.registryStale"));
+                return;
+            }
+            // The save runs the catalog stamp check, so a stale or unsaved catalog stops here.
+            if (!ValidateRegistryIdentity(item.Name, item.Url, state.Registries, item, out var error) ||
+                !(item.Transient ? TryPromote(state, item, out error) : PersistCatalog(state, out error)))
+            {
+                Notify(title, error);
                 if (root.panel != null) Render(root, displayName, state);
                 return;
             }
-            state.Drafts.Remove(draft.DraftKey);
-            state.Select(added);
+            ProjectRegistryEdit.Apply(item.Name, item.Url, scope.Value, true, out error);
+            if (!string.IsNullOrEmpty(error)) Notify(RegistryText.T("project.title"), error);
             if (root.panel != null) Render(root, displayName, state);
         }
 
         // Credentials are keyed by the URL at click time; editing the catalog URL never moves or deletes them.
         private static void BindCredentialActions(VisualElement root, string displayName, State state, Registry item)
         {
-            state.CredentialUrlOf(item, out var ambiguous);
+            // A partial entry without a URL has no credential key, so both actions stay disabled.
+            var usable = state.CredentialUrlOf(item, out var ambiguous) != null;
             var setupAuth = root.Q<Button>("setup-auth");
-            setupAuth.SetEnabled(state.CredentialError == null && !ambiguous);
+            setupAuth.SetEnabled(state.CredentialError == null && usable);
             var test = root.Q<Button>("test-connection");
             Action tips = () =>
             {
                 setupAuth.tooltip = state.CredentialError != null ? CredentialMessages.Describe(state.CredentialError)
-                    : ambiguous ? AmbiguousTip : RegistryText.T("tip.setupAuth");
-                test.tooltip = ambiguous ? AmbiguousTip : RegistryText.T("tip.testConnection");
+                    : ambiguous ? AmbiguousTip : !usable ? RegistryText.T("tip.urlRequired") : RegistryText.T("tip.setupAuth");
+                test.tooltip = ambiguous ? AmbiguousTip : !usable ? RegistryText.T("tip.urlRequired") : RegistryText.T("tip.testConnection");
             };
             tips();
             state.Relabel += tips;
             setupAuth.clicked += () =>
             {
                 var target = state.CredentialUrlOf(item, out var unclear);
-                if (unclear) return;
+                if (unclear || target == null) return;
                 RegistryAuthWindow.Open(target, () =>
                 {
                     if (root.panel == null) return;
@@ -595,11 +653,11 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             };
 
             test.name = "test-connection-" + item.Id;
-            test.SetEnabled(!state.CheckRunning && !ambiguous);
+            test.SetEnabled(!state.CheckRunning && usable);
             test.clicked += () =>
             {
                 var target = state.CredentialUrlOf(item, out var unclear);
-                if (!unclear) CheckConnection(root, state, item, target);
+                if (!unclear && target != null) CheckConnection(root, state, item, target);
             };
         }
 
@@ -651,8 +709,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
 
         private static void BindScopeList(VisualElement root, string displayName, State state, ListView list, Registry item, VisualTreeAsset rowTemplate)
         {
-            // Draft scopes stay in memory until the row is registered.
-            Func<bool> save = () => item.Transient || Finish(root, displayName, state);
+            // Every scope edit is saved; a draft's first one promotes it into the catalog.
+            Func<bool> save = () => SaveEdit(root, displayName, state, item);
             var remove = list.Q<Button>(BaseListView.footerRemoveButtonName);
             remove.name = "delete-scope";
             Action updateRemove = () =>
@@ -676,8 +734,9 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 Action updateAction = () =>
                 {
                     projectAction.text = RegistryText.T(scope.InProject ? "scope.removeFromProject" : "scope.addToProject");
-                    projectAction.SetEnabled(!item.Transient && state.ManifestError == null && (scope.InProject ? !scope.Blocked : !string.IsNullOrWhiteSpace(scope.Value)));
-                    projectAction.tooltip = item.Transient ? RegistryText.T("scope.tip.registerFirst") : state.ManifestError ?? (scope.InProject && scope.ReferenceCount > 0
+                    // Adding stays clickable with missing fields; the click lists what is missing.
+                    projectAction.SetEnabled(state.ManifestError == null && (!scope.InProject || !scope.Blocked));
+                    projectAction.tooltip = state.ManifestError ?? (scope.InProject && scope.ReferenceCount > 0
                         ? RegistryText.T("project.referenced")
                         : scope.InProject && scope.Blocked ? UnresolvedTip
                         : RegistryText.T(scope.InProject ? "scope.tip.remove" : "scope.tip.add"));
@@ -700,13 +759,14 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                 updateAction();
                 projectAction.clickable = new Clickable(() =>
                 {
-                    var removing = scope.InProject;
-                    var scopeValue = scope.Value;
-                    var registryName = item.Name;
-                    var registryUrl = item.Url;
-                    if (item.Transient || (!removing && string.IsNullOrWhiteSpace(scopeValue))) return;
-                    ProjectRegistryEdit.Apply(registryName, registryUrl, scopeValue, !removing, out var error);
-                    if (!string.IsNullOrEmpty(error)) EditorUtility.DisplayDialog(RegistryText.T("project.title"), error, RegistryText.T("button.close"));
+                    if (!scope.InProject)
+                    {
+                        AddToProject(root, displayName, state, item, scope);
+                        return;
+                    }
+                    if (item.Transient) return;
+                    ProjectRegistryEdit.Apply(item.Name, item.Url, scope.Value, false, out var error);
+                    if (!string.IsNullOrEmpty(error)) Notify(RegistryText.T("project.title"), error);
                     if (root.panel != null) Render(root, displayName, state);
                 });
             };
@@ -784,8 +844,9 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
         private static bool Finish(VisualElement root, string displayName, State state)
         {
             if (PersistCatalog(state, out var error)) return true;
-            EditorUtility.DisplayDialog(RegistryText.T("catalog.title"), error, RegistryText.T("button.close"));
-            if (root.panel != null) Render(root, displayName, state);
+            Notify(RegistryText.T("catalog.title"), error);
+            // After the event that saved: the reloaded catalog replaces the rows bound on this page.
+            RenderLater(root, displayName, state);
             return false;
         }
 
@@ -831,10 +892,15 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             scopes = item.Scopes.Select(scope => scope.Value).ToArray()
         }).ToArray();
 
+        // A name only or a URL only is enough; the dialog's prefilled scheme alone counts as no URL.
         private static bool TryAddRegistry(State state, string name, string url, out string error)
         {
-            if (!ValidateRegistryIdentity(name, url, state.Registries, null, out error)) return false;
-            var added = new Registry(state.NextId(), name.Trim(), NormalizeUrl(url), new List<string>(), false, 0);
+            var typedUrl = (url ?? "").Trim();
+            if (string.Equals(typedUrl, "https://", StringComparison.OrdinalIgnoreCase) || string.Equals(typedUrl, "http://", StringComparison.OrdinalIgnoreCase))
+                url = "";
+            if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(url)) { error = RegistryText.T("add.empty"); return false; }
+            if (!ValidateCatalogIdentity(name, url, state.Registries, null, out error)) return false;
+            var added = new Registry(state.NextId(), (name ?? "").Trim(), NormalizeUrl(url), new List<string>(), false, 0);
             state.Registries.Add(added);
             state.SelectedRegistryId = added.Id;
             return true;
@@ -842,23 +908,33 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
 
         private static bool TryUpdateRegistryIdentity(State state, Registry item, string name, string url, out string error)
         {
-            if (!ValidateRegistryIdentity(name, url, state.Registries, item, out error)) return false;
-            var normalizedUrl = NormalizeUrl(url);
-            item.Name = name.Trim();
-            item.Url = normalizedUrl;
+            if (!ValidateCatalogIdentity(name, url, state.Registries, item, out error)) return false;
+            item.Name = (name ?? "").Trim();
+            item.Url = NormalizeUrl(url);
             return true;
         }
 
+        // Catalog storage: any field may be blank. A non-empty URL must be valid, and non-empty names and URLs unique;
+        // blank ones never conflict with each other.
+        private static bool ValidateCatalogIdentity(string name, string url, IEnumerable<Registry> items, Registry editing, out string error)
+        {
+            var trimmedName = (name ?? "").Trim();
+            var normalizedUrl = NormalizeUrl(url);
+            error = null;
+            if (normalizedUrl.Length > 0 && !ValidateUrl(normalizedUrl, out error)) return false;
+            if (trimmedName.Length > 0 && items.Any(item => item != editing && string.Equals(item.Name, trimmedName, StringComparison.OrdinalIgnoreCase)))
+            { error = RegistryText.T("registry.duplicateName"); return false; }
+            if (normalizedUrl.Length > 0 && items.Any(item => item != editing && string.Equals(item.Url, normalizedUrl, StringComparison.OrdinalIgnoreCase)))
+            { error = RegistryText.T("registry.duplicateUrl"); return false; }
+            return true;
+        }
+
+        // Adding to the project also needs a name and a valid URL.
         private static bool ValidateRegistryIdentity(string name, string url, IEnumerable<Registry> items, Registry editing, out string error)
         {
             if (string.IsNullOrWhiteSpace(name)) { error = RegistryText.T("registry.nameRequired"); return false; }
             if (!ValidateUrl(url, out error)) return false;
-            if (items.Any(item => item != editing && string.Equals(item.Name, name.Trim(), StringComparison.OrdinalIgnoreCase)))
-            { error = RegistryText.T("registry.duplicateName"); return false; }
-            if (items.Any(item => item != editing && string.Equals(item.Url, NormalizeUrl(url), StringComparison.OrdinalIgnoreCase)))
-            { error = RegistryText.T("registry.duplicateUrl"); return false; }
-            error = null;
-            return true;
+            return ValidateCatalogIdentity(name, url, items, editing, out error);
         }
 
         private static bool ValidateUrl(string value, out string error)
@@ -875,7 +951,7 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             return true;
         }
 
-        private static string NormalizeUrl(string value) => value.Trim().TrimEnd('/');
+        private static string NormalizeUrl(string value) => (value ?? "").Trim().TrimEnd('/');
         private sealed class State
         {
             private int _nextId;
@@ -918,6 +994,7 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
 
             internal static string CredentialKey(string url)
             {
+                if (string.IsNullOrWhiteSpace(url)) return null;
                 try { return UrlRules.Key(url); }
                 catch (RegistryException) { return null; }
             }
@@ -956,6 +1033,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                     ambiguous = item.CredentialUrl == null;
                     return item.CredentialUrl;
                 }
+                // A partial entry without a URL has no credential.
+                if (string.IsNullOrWhiteSpace(item.Url)) { ambiguous = false; return null; }
                 return ResolveCredential(Credentials.Keys, item.Url, out ambiguous);
             }
 
@@ -1014,7 +1093,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
 
             internal void Reload()
             {
-                var selectedUrl = SelectedRegistry?.Url;
+                var selected = SelectedRegistry;
+                var selectedIndex = selected == null ? -1 : Registries.IndexOf(selected);
                 try
                 {
                     var snap = RegistryCatalog.Load();
@@ -1023,8 +1103,12 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                     Stamp = snap.Stamp;
                     WriteTimeUtc = snap.WriteTimeUtc;
                     LoadErrorKey = null;
-                    SelectedRegistryId = Registries.FirstOrDefault(item => string.Equals(item.Url, selectedUrl, StringComparison.OrdinalIgnoreCase))?.Id
-                        ?? (SelectedOrphanKey == null ? Registries.FirstOrDefault()?.Id : null);
+                    // Partial entries may lack a URL or a name, so the URL, then the name, then the position finds the row again.
+                    var match = selected == null ? null :
+                        Registries.FirstOrDefault(item => item.Url.Length > 0 && string.Equals(item.Url, selected.Url, StringComparison.OrdinalIgnoreCase)) ??
+                        Registries.FirstOrDefault(item => item.Name.Length > 0 && string.Equals(item.Name, selected.Name, StringComparison.OrdinalIgnoreCase)) ??
+                        (selectedIndex >= 0 && selectedIndex < Registries.Count ? Registries[selectedIndex] : null);
+                    SelectedRegistryId = match?.Id ?? (SelectedOrphanKey == null ? Registries.FirstOrDefault()?.Id : null);
                 }
                 catch (Exception)
                 {
@@ -1048,9 +1132,11 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
                     foreach (var scope in registry.Scopes)
                     {
                         var value = scope.Value?.Trim();
-                        scope.InProject = view.Contains(registry.Url, value);
-                        scope.ReferenceCount = view.ReferencesOf(registry.Url, value);
-                        scope.Unresolved = view.UnresolvedOf(value);
+                        // An entry without a URL cannot be in the project.
+                        var listed = !string.IsNullOrWhiteSpace(registry.Url);
+                        scope.InProject = listed && view.Contains(registry.Url, value);
+                        scope.ReferenceCount = listed ? view.ReferencesOf(registry.Url, value) : 0;
+                        scope.Unresolved = listed && view.UnresolvedOf(value);
                     }
             }
         }
@@ -1070,8 +1156,9 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
         private sealed class Registry
         {
             internal Registry(int id, string name, string url, List<string> scopes, bool inProject, int referenceCount)
-            { Id = id; Name = name; Url = url; Scopes = scopes.Select((value, index) => new Scope(value, inProject, index == 0 ? referenceCount : 0)).ToList(); }
-            internal int Id { get; }
+            { Id = id; Name = name ?? ""; Url = url ?? ""; Scopes = scopes.Select((value, index) => new Scope(value, inProject, index == 0 ? referenceCount : 0)).ToList(); }
+            // Reassigned once when a draft is promoted into the catalog.
+            internal int Id { get; set; }
             internal string Name { get; set; }
             internal string Url { get; set; }
             internal List<Scope> Scopes { get; set; }

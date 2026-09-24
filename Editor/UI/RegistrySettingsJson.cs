@@ -63,11 +63,11 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             for (var index = 0; index < entries.Length; index++)
             {
                 var entry = entries[index];
-                if (entry == null || string.IsNullOrWhiteSpace(entry.name) || string.IsNullOrWhiteSpace(entry.url))
-                    throw InvalidSettings();
-                var name = entry.name.Trim();
-                var url = entry.url.Trim().TrimEnd('/');
-                if (!names.Add(name) || !urls.Add(url) || !AcceptUrl(url)) throw InvalidSettings();
+                if (entry == null) throw InvalidSettings();
+                // Partial entries are stored: a blank name or URL is allowed and never conflicts with another blank one.
+                var name = (entry.name ?? string.Empty).Trim();
+                var url = (entry.url ?? string.Empty).Trim().TrimEnd('/');
+                if ((name.Length > 0 && !names.Add(name)) || (url.Length > 0 && (!urls.Add(url) || !AcceptUrl(url)))) throw InvalidSettings();
                 var scopes = entry.scopes == null ? new string[0] : entry.scopes.Select(scope => scope ?? string.Empty).ToArray();
                 stored[index] = new Entry { name = name, url = url, scopes = scopes };
             }
@@ -90,8 +90,8 @@ namespace com.amari_noa.amari_unity_package_registry_manager.editor
             WriteCatalog(document.scopedRegistries);
             return document.scopedRegistries.Select(entry => new Entry
             {
-                name = entry.name.Trim(),
-                url = entry.url.Trim().TrimEnd('/'),
+                name = (entry.name ?? string.Empty).Trim(),
+                url = (entry.url ?? string.Empty).Trim().TrimEnd('/'),
                 scopes = entry.scopes == null ? new string[0] : entry.scopes.Select(scope => scope ?? string.Empty).ToArray()
             }).ToArray();
         }
